@@ -1,0 +1,182 @@
+---
+title: "Practical Machine Learning Project"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r,echo=FALSE, results='hide',message=FALSE, warning=FALSE}
+library(MASS)
+library(randomForest)
+library(tidyverse)
+library(boot)
+library(caret)
+library(rattle)
+```
+# Executive summary
+This anlysis fit an LDA and GBM model to the Weight Lifting Exercise Dataset found here: http://groupware.les.inf.puc-rio.br/har. The anlysis found that the LDA model suffered from collinearity issues and was unable to predict with more than 61% accuracy. The GBM model did not suffer from this issue and was able to predict with approximately 96% accuracy.
+
+# Import Data
+The data can be downloaded directly from the web and read from a temp file using the following code:
+```{r}
+Temp <- tempfile()
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",Temp)
+OTraining <- read.csv(Temp)
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",Temp)
+OTesting <- read.csv(Temp)
+unlink(Temp)
+```
+# Exploratory Analysis
+The featurePlot function found in the Caret package is a useful tool for ispecting the data. A few of the features are plotted below.
+```{r}
+featurePlot(x = OTraining[, c("pitch_forearm","magnet_belt_z","accel_dumbbell_y"
+                              ,"accel_dumbbell_z","magnet_arm_x","roll_forearm")], 
+            y = factor(OTraining$classe), 
+            plot = "box", 
+            scales = list(y = list(relation="free"),
+                          x = list(rot = 90)),  
+            layout = c(3,2 ))
+```
+# Models
+## LDA Model
+Since the problem statement is to classify the manner in which exersises were performed and the data set has 5 potential classes and some differences in averages as shown in the exploratory anlysis, an LDA model seemed like a fair place to start.
+### Variable Selection
+
+Running:
+```{r, eval = FALSE}
+View(OTraining)
+```
+
+Allows users to inspect the raw data in R. It is immediately apparent that there are a great deal of missing values and that most of them are in the columns with 'min', 'max', 'kurtosis', and 'skewness' in the variable name. While these provide useful detail about the distributions, there are far to many missing values for them to be useful.  For the initial pass, the following predictors were used:
+```{r, echo = FALSE}
+predictors <- c("roll_belt",
+                "pitch_belt",
+                "yaw_belt",
+                "total_accel_belt",
+                "gyros_belt_x",
+                "gyros_belt_y",
+                "gyros_belt_z",
+                "accel_belt_x",
+                "accel_belt_y",
+                "accel_belt_z",
+                "magnet_belt_x",
+                "magnet_belt_y",
+                "magnet_belt_z",
+                "roll_arm",
+                "pitch_arm",
+                "yaw_arm",
+                "total_accel_arm",
+                "gyros_arm_x",
+                "gyros_arm_y",
+                "gyros_arm_z",
+                "accel_arm_x",
+                "accel_arm_y",
+                "accel_arm_z",
+                "magnet_arm_x",
+                "magnet_arm_y",
+                "magnet_arm_z",
+                "roll_forearm",
+                "pitch_forearm",
+                "yaw_forearm",
+                "total_accel_forearm",
+                "gyros_forearm_x",
+                "gyros_forearm_y",
+                "gyros_forearm_z",
+                "accel_forearm_x",
+                "accel_forearm_y",
+                "accel_forearm_z",
+                "magnet_forearm_x",
+                "magnet_forearm_y",
+                "magnet_forearm_z",
+                "roll_dumbbell",
+                "pitch_dumbbell",
+                "yaw_dumbbell",
+                "total_accel_dumbbell",
+                "gyros_dumbbell_x",
+                "gyros_dumbbell_y",
+                "gyros_dumbbell_z",
+                "accel_dumbbell_x",
+                "accel_dumbbell_y",
+                "accel_dumbbell_z",
+                "magnet_dumbbell_x",
+                "magnet_dumbbell_y",
+                "magnet_dumbbell_z")
+matrix(predictors,ncol = 2, byrow = F)
+Training <- OTraining[,c(predictors,"classe")]
+Training$classe <- factor(Training$classe)
+```
+
+### Feature selection
+The following code was used to perform forward selection using the cross-validation error as the measure for feature selection:
+```{r}
+{
+LDAdata <- data.frame()
+for(i in 1:(ncol(Training)-1)){
+  dat =data.frame(iteration = rep(i,(ncol(Training)-i)),
+                  model = (ncol(Training) - i):1)
+  LDAdata  = rbind(LDAdata,dat)
+  
+}
+
+predlist <- 1:(ncol(Training)-1)
+selected <- c()
+results <- data.frame()
+for(i in 1:(((ncol(Training)-1)*ncol(Training))/2)){
+ 
+  ldaFit <- train(classe ~., data = Training[,c(selected,predlist[LDAdata[i,"model"]],53)]
+                  , method = "lda"
+                  ,trControl = trainControl(method = "cv")) 
+  LDAdata[i,"predictor"] = predictors[predlist[LDAdata[i,"model"]]]
+  LDAdata[i,"Accuracy"] = ldaFit$results["Accuracy"]
+  
+  if (LDAdata[i,"model"] == 1) {
+    iteration = LDAdata[i,"iteration"]
+    candidates = LDAdata[LDAdata$iteration == iteration,]
+    bestPred = candidates[which.max(candidates$Accuracy),"model"]
+    selected = c(selected,bestPred)
+    results = rbind(results,candidates[which.max(candidates$Accuracy),])
+  }
+}
+plot(results$iteration,results$Accuracy)
+head(results)
+}
+```
+
+
+### Best LDA Model Results
+Looking at the estimated test accuracy as more predictors are added in shows that there is very little gain in accuracy after 34 predictors. Adding additional predictors could lead to overtraining. As a result, the first 34 predictors were used to create an LDA model which had the following results:
+
+```{r,warning=FALSE}
+predictors = results[1:34,"predictor"]
+ldaFit <- train(classe ~., data = Training[,c(predictors,"classe")], method = "lda"
+                ,trControl = trainControl(method = "cv"))
+ldaFit
+predictions <- predict(ldaFit,newdata = Training[,c(predictors)])
+confusionMatrix(predictions,as.factor(Training$classe))
+```
+
+The Cross-validation accuracy is approximately 61% and the training accuracy is 61%. This is far too low to pass the quiz which requires an 80% or higher. The model does warn that there are collinear variables but the LDA assumptions may not work well for this data set.
+
+## GBM Model
+Since the LDA model accuracy isn't high enough, a gradient boosting model may yield better results and if not, it could be blended with the LDA and an additional model to achieve the desired accuracy. The gbm model was set using the following code:
+
+```{r}
+modelFit <- train(classe ~., data = Training, method = "gbm",
+                  trControl = trainControl(method = "cv"))
+modelFit
+predictions <- predict(modelFit,newdata = Training)
+predictions
+confusionMatrix(predictions,as.factor(Training$classe))
+
+```
+
+### GBM Results
+The GBM is leaps and bounds better than the LDA with an estimated accuracy of 96% and a training accuracy of 97%. As a result, this model was applied to the test data using the following code:
+
+```{r}
+quiz <- Testing
+quiz$prediction <- predict(modelFit,newdata = Testing)
+quiz <- quiz[,c("problem_id","prediction")]
+```
+
+The prediction results were then entered into the week 4 quiz 2 with passing results.
